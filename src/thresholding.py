@@ -25,19 +25,34 @@ def manual_threshold(image, threshold_value):
 
 def otsu_threshold(image):
     """
-    Apply Otsu thresholding to an image.
+    Apply Otsu thresholding to an image using NumPy for histogram calculation.
 
     Args:
-        image: Grayscale input image
+        image: Grayscale input image (NumPy array, expected to be 8-bit, 0-255)
 
     Returns:
         Binary image and the computed threshold value
     """
-    hist = cv2.calcHist([image], [0], None, [256], [0, 256])
-    hist = hist.reshape(-1)
+    # Ensure image is a NumPy array and is 2D (grayscale)
+    if not isinstance(image, np.ndarray):
+        raise TypeError("Input image must be a NumPy array.")
+    if image.ndim != 2:
+        raise ValueError("Input image must be a 2D grayscale image.")
+    if image.dtype != np.uint8:
+        # Or convert: image = image.astype(np.uint8) if conversion is acceptable
+        print("Warning: Otsu's method is typically applied to 8-bit images. Ensure pixel values are in [0, 255].")
+
+    # Calculate histogram using NumPy
+    hist = np.bincount(image.ravel(), minlength=256)
+
+    # Convert hist to float for division
+    hist = hist.astype(float)
 
     # Normalize histogram to get probabilities
     pixel_count = image.shape[0] * image.shape[1]
+    if pixel_count == 0:  # Handle empty image case
+        return np.zeros_like(image), 0
+
     hist = hist / pixel_count
 
     # Compute cumulative sums
@@ -51,7 +66,7 @@ def otsu_threshold(image):
     global_mean = cum_means[-1]
 
     # Initialize variables for maximum variance and optimal threshold
-    max_variance = 0
+    max_variance = 0.0
     optimal_threshold = 0
 
     # Compute between-class variance for each possible threshold
@@ -62,9 +77,9 @@ def otsu_threshold(image):
             continue
 
         # Weight for foreground class
-        w_fg = 1 - w_bg
+        w_fg = 1.0 - w_bg
         if w_fg == 0:
-            continue
+            break
 
         # Mean for background class
         mean_bg = cum_means[t - 1] / w_bg
@@ -81,8 +96,8 @@ def otsu_threshold(image):
             optimal_threshold = t
 
     # Apply threshold
-    binary = np.zeros_like(image)
-    binary[image > optimal_threshold] = 255
+    binary = np.zeros_like(image, dtype=np.uint8)
+    binary[image >= optimal_threshold] = 255
 
     return binary, optimal_threshold
 
