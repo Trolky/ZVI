@@ -102,7 +102,7 @@ def otsu_threshold(image):
     return binary, optimal_threshold
 
 
-def su_local_max_min_threshold(image, window_size=15, k=0.5, R=128):
+def su_local_max_min_threshold(image, window_size=15, k=0.5, R=128, use_scipy_filters=True):
     """
     Apply SU_local_max_min thresholding to an image.
     This method uses local maximum and minimum values within a window to determine the threshold.
@@ -112,17 +112,23 @@ def su_local_max_min_threshold(image, window_size=15, k=0.5, R=128):
         window_size: Size of the local window
         k: Weight parameter, usually between 0.2 and 0.8
         R: Normalization factor, typically 128 for 8-bit images
+        use_scipy_filters: Boolean, if True, uses scipy.ndimage filters, else uses NumPy-based custom filters.
 
     Returns:
         Binary image
     """
-    # Ensure window size is odd
+    # Ensure window size is odd (important for custom filters, scipy handles it)
     if window_size % 2 == 0:
         window_size += 1
 
-    # Calculate local maximum and minimum using filters
-    local_max = maximum_filter(image, size=window_size)
-    local_min = minimum_filter(image, size=window_size)
+    if use_scipy_filters:
+        from scipy.ndimage import maximum_filter, minimum_filter
+        local_max = maximum_filter(image, size=window_size)
+        local_min = minimum_filter(image, size=window_size)
+    else:
+        print("Using NumPy-based local max/min filters. This might be slow for large images.")
+        local_max = numpy_maximum_filter(image, window_size=window_size)
+        local_min = numpy_minimum_filter(image, window_size=window_size)
 
     # Calculate local contrast
     local_contrast = local_max - local_min
@@ -131,10 +137,11 @@ def su_local_max_min_threshold(image, window_size=15, k=0.5, R=128):
     threshold = k * local_max + (1 - k) * local_min
 
     # Apply normalization if contrast is low
-    # If contrast is below R, adjust threshold
     low_contrast_mask = local_contrast < R
     if np.any(low_contrast_mask):
         # For low contrast regions, use a weighted average
+        # uniform_filter is also from scipy.ndimage. If you want to remove scipy completely,
+        # this would also need a NumPy-based replacement (e.g., a mean filter).
         mean_value = uniform_filter(image.astype(float), size=window_size)
         threshold[low_contrast_mask] = mean_value[low_contrast_mask]
 
@@ -189,3 +196,95 @@ def recursive_otsu_threshold(image, max_depth=3):
         return binary
 
     return recursive_otsu(image)
+
+
+def numpy_pad_image(image, pad_width, mode='constant', constant_values=0):
+    """
+    Pads an image using NumPy. A simplified version of np.pad for 2D.
+    Args:
+        image: 2D NumPy array.
+        pad_width: Integer, number of pixels to pad on all sides.
+        mode: Padding mode. 'constant', 'reflect', 'symmetric', 'edge' are common.
+              This simplified version will primarily support 'constant' and 'edge'.
+        constant_values: Value to use for 'constant' padding.
+    Returns:
+        Padded 2D NumPy array.
+    """
+    if mode == 'constant':
+        return np.pad(image, pad_width, mode='constant', constant_values=constant_values)
+    elif mode == 'edge':
+        return np.pad(image, pad_width, mode='edge')
+    # Add other modes like 'reflect', 'symmetric' if needed, they are more complex.
+    else:  # Default to constant if mode is not recognized for simplicity
+        print(f"Warning: Unsupported padding mode '{mode}'. Defaulting to 'constant'.")
+        return np.pad(image, pad_width, mode='constant', constant_values=constant_values)
+
+
+def numpy_maximum_filter(image, window_size):
+    """
+    Apply a maximum filter to an image using NumPy and loops.
+    This is a basic implementation and will be slower than scipy.ndimage.maximum_filter.
+
+    Args:
+        image: Grayscale input image (2D NumPy array)
+        window_size: Size of the square local window (integer)
+
+    Returns:
+        Image with maximum filter applied (2D NumPy array)
+    """
+    if window_size % 2 == 0:
+        # print("Warning: window_size should be odd for symmetric windows. Incrementing.")
+        window_size += 1  # Ensure odd window size for a clear center
+
+    pad_width = window_size // 2
+    padded_image = numpy_pad_image(image, pad_width, mode='edge')  # Use edge padding
+    output_image = np.zeros_like(image, dtype=image.dtype)
+
+    rows, cols = image.shape
+
+    for r in range(rows):
+        for c in range(cols):
+            # Define the window in the padded image
+            # r_start, r_end = r, r + window_size
+            # c_start, c_end = c, c + window_size
+            # window = padded_image[r_start:r_end, c_start:c_end]
+            # Correct window indexing: center of window corresponds to (r,c) in original image
+            window = padded_image[r: r + window_size, c: c + window_size]
+            output_image[r, c] = np.max(window)
+
+    return output_image
+
+
+def numpy_minimum_filter(image, window_size):
+    """
+    Apply a minimum filter to an image using NumPy and loops.
+    This is a basic implementation and will be slower than scipy.ndimage.minimum_filter.
+
+    Args:
+        image: Grayscale input image (2D NumPy array)
+        window_size: Size of the square local window (integer)
+
+    Returns:
+        Image with minimum filter applied (2D NumPy array)
+    """
+    if window_size % 2 == 0:
+        # print("Warning: window_size should be odd for symmetric windows. Incrementing.")
+        window_size += 1  # Ensure odd window size
+
+    pad_width = window_size // 2
+    padded_image = numpy_pad_image(image, pad_width, mode='edge')  # Use edge padding
+    output_image = np.zeros_like(image, dtype=image.dtype)
+
+    rows, cols = image.shape
+
+    for r in range(rows):
+        for c in range(cols):
+            # Define the window in the padded image
+            # r_start, r_end = r, r + window_size
+            # c_start, c_end = c, c + window_size
+            # window = padded_image[r_start:r_end, c_start:c_end]
+            # Correct window indexing
+            window = padded_image[r: r + window_size, c: c + window_size]
+            output_image[r, c] = np.min(window)
+
+    return output_image

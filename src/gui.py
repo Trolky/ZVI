@@ -1,7 +1,8 @@
+
 import cv2
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QPushButton, QSlider, QComboBox, QFileDialog, QSpinBox,
-                             QDoubleSpinBox, QGroupBox, QFormLayout)
+                             QDoubleSpinBox, QGroupBox, QFormLayout, QCheckBox, QMessageBox)
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
 
@@ -17,6 +18,10 @@ class ThresholdingApp(QMainWindow):
         self.current_image = None
         self.history = []
         self.history_position = -1
+
+        self.inital_width = 0
+        self.initial_height = 0
+        self.set_initial = False
 
         self.init_ui()
 
@@ -85,6 +90,17 @@ class ThresholdingApp(QMainWindow):
         self.r_value_spin.setRange(1, 255)
         self.r_value_spin.setValue(128)
 
+        # Checkbox for scipy/custom filter
+        self.use_scipy_checkbox = QCheckBox("Use scipy filters (faster)")
+        self.use_scipy_checkbox.setChecked(True)
+        self.use_scipy_checkbox.stateChanged.connect(self.su_filter_checkbox_changed)
+
+        # Warning label for custom filter
+        self.slow_warning_label = QLabel(
+            "<span style='color: red;'>Warning: Custom implementation can be slow for large images.</span>")
+        self.slow_warning_label.setWordWrap(True)
+        self.slow_warning_label.hide()
+
         # Recursive Otsu parameters
         self.max_depth_spin = QSpinBox()
         self.max_depth_spin.setRange(1, 5)
@@ -96,6 +112,8 @@ class ThresholdingApp(QMainWindow):
         self.params_layout.addRow("Window Size:", self.window_size_spin)
         self.params_layout.addRow("K Value:", self.k_value_spin)
         self.params_layout.addRow("R Value:", self.r_value_spin)
+        self.params_layout.addRow(self.use_scipy_checkbox)
+        self.params_layout.addRow(self.slow_warning_label)
         self.params_layout.addRow("Max Depth:", self.max_depth_spin)
 
         self.params_group.setLayout(self.params_layout)
@@ -167,6 +185,20 @@ class ThresholdingApp(QMainWindow):
         # Initialize UI state
         self.method_changed()
 
+    def su_filter_checkbox_changed(self):
+        # Show/hide warning label based on checkbox state
+        if self.use_scipy_checkbox.isChecked():
+            self.slow_warning_label.hide()
+        else:
+            self.slow_warning_label.show()
+            # Optionally, show a popup warning
+            QMessageBox.warning(
+                self,
+                "Performance Warning",
+                "Custom implementation can be very slow for large images.\n"
+                "It is recommended to use scipy filters if possible."
+            )
+
     def load_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Image", "",
                                                    "Image Files (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
@@ -182,6 +214,7 @@ class ThresholdingApp(QMainWindow):
             self.history = []
             self.history_position = -1
             self.current_image = self.original_image.copy()
+            self.set_initial = False
 
             # Display original image
             self.display_image(self.original_image, self.original_image_view)
@@ -214,6 +247,11 @@ class ThresholdingApp(QMainWindow):
                 item = self.params_layout.itemAt(i, j)
                 if item and item.widget():
                     item.widget().hide()
+        # Hide single-widget rows (checkbox, warning)
+        for i in range(self.params_layout.rowCount()):
+            item = self.params_layout.itemAt(i, 0)
+            if item and item.widget() and isinstance(item.widget(), (QCheckBox, QLabel)):
+                item.widget().hide()
 
         # Show relevant parameters based on selected method
         if method == "Manual Threshold":
@@ -233,10 +271,16 @@ class ThresholdingApp(QMainWindow):
             self.params_layout.itemAt(3, 1).widget().show()  # K value spin
             self.params_layout.itemAt(4, 0).widget().show()  # R value label
             self.params_layout.itemAt(4, 1).widget().show()  # R value spin
+            # Show checkbox and warning label
+            self.use_scipy_checkbox.show()
+            if not self.use_scipy_checkbox.isChecked():
+                self.slow_warning_label.show()
+            else:
+                self.slow_warning_label.hide()
 
         elif method == "Recursive Otsu":
-            self.params_layout.itemAt(5, 0).widget().show()  # Max depth label
-            self.params_layout.itemAt(5, 1).widget().show()  # Max depth spin
+            self.params_layout.itemAt(7, 0).widget().show()  # Max depth label
+            self.params_layout.itemAt(7, 1).widget().show()  # Max depth spin
 
     def update_threshold_value(self):
         value = self.threshold_slider.value()
@@ -260,7 +304,8 @@ class ThresholdingApp(QMainWindow):
             window_size = self.window_size_spin.value()
             k_value = self.k_value_spin.value()
             r_value = self.r_value_spin.value()
-            result = su_local_max_min_threshold(self.original_image, window_size, k_value, r_value)
+            use_scipy = self.use_scipy_checkbox.isChecked()
+            result = su_local_max_min_threshold(self.original_image, window_size, k_value, r_value, use_scipy)
 
         elif method == "Recursive Otsu":
             max_depth = self.max_depth_spin.value()
@@ -312,20 +357,23 @@ class ThresholdingApp(QMainWindow):
 
         # Convert to RGB for display
         if len(image.shape) == 2:
-            # Grayscale image
             h, w = image.shape
             bytes_per_line = w
             q_image = QImage(image.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
         else:
-            # Color image
             h, w, c = image.shape
             bytes_per_line = w * c
             q_image = QImage(image.data, w, h, bytes_per_line, QImage.Format_RGB888)
 
         pixmap = QPixmap.fromImage(q_image)
 
-        # Scale pixmap to fit in label while maintaining aspect ratio
+        # Only scale down, not up
         label_size = label.size()
-        scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if not self.set_initial:
+            self.inital_width = label_size.width()
+            self.initial_height = label_size.height()
+            self.set_initial = True
+
+        scaled_pixmap = pixmap.scaled(self.inital_width, self.initial_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
         label.setPixmap(scaled_pixmap)
